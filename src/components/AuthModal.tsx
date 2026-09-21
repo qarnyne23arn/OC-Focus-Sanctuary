@@ -13,8 +13,15 @@ import {
   Smartphone,
   Laptop,
 } from 'lucide-react';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+} from 'firebase/auth';
+import { auth, googleProvider } from '../utils/firebase';
 import { UserProfile } from '../types';
-import { apiLogIn, apiSignUp, saveStoredAuth, setGuestDismissed } from '../utils/auth';
+import { saveStoredAuth, setGuestDismissed } from '../utils/auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -43,6 +50,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
+  const getFriendlyAuthError = (errorCode: string): string => {
+    switch (errorCode) {
+      case 'auth/email-already-in-use':
+        return 'This email address is already registered. Please log in instead.';
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':
+      case 'auth/user-not-found':
+        return 'Invalid email or password. Please check your credentials.';
+      case 'auth/weak-password':
+        return 'Password is too weak. Please use at least 6 characters.';
+      case 'auth/invalid-email':
+        return 'Please enter a valid email address.';
+      case 'auth/popup-closed-by-user':
+        return 'Google Sign-In popup was closed before completing.';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your internet connection.';
+      default:
+        return errorCode.replace('Firebase: ', '').replace(/$$auth\/.*?$$/, '').trim() || 'Authentication failed. Please try again.';
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -68,24 +96,81 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (mode === 'signup') {
-        const result = await apiSignUp(email.trim(), password, name.trim());
-        saveStoredAuth(result.user, result.token);
-        setSuccessMsg(`Welcome, ${result.user.name}! Your account has been created.`);
+        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        const firebaseUser = userCredential.user;
+
+        if (name.trim()) {
+          try {
+            await updateProfile(firebaseUser, { displayName: name.trim() });
+          } catch (profileErr) {
+            console.warn('Failed to update display name:', profileErr);
+          }
+        }
+
+        const token = await firebaseUser.getIdToken();
+        const userProfile: UserProfile = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || email.trim(),
+          name: firebaseUser.displayName || name.trim() || email.split('@')[0],
+          createdAt: new Date().toISOString(),
+        };
+
+        saveStoredAuth(userProfile, token);
+        setSuccessMsg(`Welcome, ${userProfile.name}! Your account has been created.`);
         setTimeout(() => {
-          onAuthenticated(result.user, result.token);
+          onAuthenticated(userProfile, token);
           onClose();
         }, 600);
       } else {
-        const result = await apiLogIn(email.trim(), password);
-        saveStoredAuth(result.user, result.token);
-        setSuccessMsg(`Welcome back, ${result.user.name}!`);
+        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const firebaseUser = userCredential.user;
+        const token = await firebaseUser.getIdToken();
+        const userProfile: UserProfile = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || email.trim(),
+          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+          createdAt: new Date().toISOString(),
+        };
+
+        saveStoredAuth(userProfile, token);
+        setSuccessMsg(`Welcome back, ${userProfile.name}!`);
         setTimeout(() => {
-          onAuthenticated(result.user, result.token);
+          onAuthenticated(userProfile, token);
           onClose();
         }, 600);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication failed. Please check your credentials.');
+      const code = err.code || err.message || '';
+      setErrorMsg(getFriendlyAuthError(code));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsLoading(true);
+
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const firebaseUser = result.user;
+      const token = await firebaseUser.getIdToken();
+      const userProfile: UserProfile = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+        createdAt: new Date().toISOString(),
+      };
+
+      saveStoredAuth(userProfile, token);
+      setSuccessMsg(`Welcome, ${userProfile.name}!`);
+      setTimeout(() => {
+        onAuthenticated(userProfile, token);
+        onClose();
+      }, 600);
+    } catch (err: any) {
+      setErrorMsg(getFriendlyAuthError(err.code || err.message));
     } finally {
       setIsLoading(false);
     }
@@ -222,6 +307,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         )}
 
+        {/* Google Sign In Button */}
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          disabled={isLoading}
+          className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2.5 transition border cursor-pointer mb-4 ${
+            isLight
+              ? 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50 shadow-sm'
+              : 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24">
+            <path
+              fill="#4285F4"
+              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+            />
+            <path
+              fill="#34A853"
+              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+            />
+            <path
+              fill="#FBBC05"
+              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+            />
+            <path
+              fill="#EA4335"
+              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+            />
+          </svg>
+          <span>Continue with Google</span>
+        </button>
+
+        <div className="relative flex items-center justify-center mb-4">
+          <div className={`absolute inset-0 flex items-center ${isLight ? 'border-slate-300' : 'border-slate-800'}`}>
+            <div className={`w-full border-t ${isLight ? 'border-slate-300' : 'border-slate-800'}`} />
+          </div>
+          <span className={`relative px-3 text-[10px] font-semibold uppercase tracking-wider ${
+            isLight ? 'bg-[#edf5f7] text-slate-500' : 'bg-[#061022] text-slate-400'
+          }`}>
+            Or with email
+          </span>
+        </div>
+
         {/* Auth Form */}
         <form onSubmit={handleSubmit} className="space-y-3.5">
           {mode === 'signup' && (
@@ -262,10 +390,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               }`} />
               <input
                 type="email"
-                required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@example.com"
+                required
                 className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition ${
                   isLight
                     ? 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
@@ -287,10 +415,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               }`} />
               <input
                 type={showPassword ? 'text' : 'password'}
-                required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
+                placeholder="At least 6 characters"
+                required
                 className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition ${
                   isLight
                     ? 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
@@ -300,10 +428,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className={`absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer ${
-                  isLight ? 'text-slate-500 hover:text-slate-800' : 'text-slate-500 hover:text-slate-300'
-                }`}
-                title={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -323,10 +448,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 }`} />
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter password"
+                  required
                   className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition ${
                     isLight
                       ? 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
@@ -340,13 +465,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-600 text-slate-950 font-black tracking-wider text-sm shadow-[0_0_25px_rgba(6,182,212,0.4)] hover:brightness-110 active:scale-[0.98] transition cursor-pointer disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
+            className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-sm tracking-wide shadow-[0_0_20px_rgba(6,182,212,0.4)] transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isLoading ? (
-              <>
-                <span className="w-4 h-4 rounded-full border-2 border-slate-950 border-t-transparent animate-spin" />
-                <span>Processing...</span>
-              </>
+              <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
             ) : mode === 'signup' ? (
               <>
                 <UserPlus className="w-4 h-4" />
@@ -355,25 +477,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             ) : (
               <>
                 <LogIn className="w-4 h-4" />
-                <span>Sign In & Sync Workspace</span>
+                <span>Log In & Restore Sanctuary</span>
               </>
             )}
           </button>
         </form>
 
-        {/* Guest Continue Footer */}
-        <div className={`mt-5 pt-4 border-t flex items-center justify-between text-xs ${
-          isLight ? 'border-slate-300 text-slate-600' : 'border-slate-800/80 text-slate-500'
-        }`}>
-          <span className={isLight ? 'text-slate-600' : 'text-slate-500'}>Want to test first?</span>
+        {/* Footer Guest Dismiss */}
+        <div className="mt-5 text-center">
           <button
             type="button"
             onClick={handleContinueAsGuest}
-            className={`font-semibold cursor-pointer underline underline-offset-2 ${
-              isLight ? 'text-cyan-800 hover:text-cyan-950' : 'text-cyan-400 hover:text-cyan-300'
+            className={`text-xs transition cursor-pointer underline underline-offset-4 ${
+              isLight ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
             }`}
           >
-            Continue as Guest →
+            Continue as guest (sync locally)
           </button>
         </div>
       </div>
