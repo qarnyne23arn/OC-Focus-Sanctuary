@@ -14,7 +14,7 @@ import {
   Laptop,
 } from 'lucide-react';
 import { UserProfile } from '../types';
-import { clientSignUp, clientLogIn, clientGoogleSignIn, saveStoredAuth, setGuestDismissed } from '../utils/auth';
+import { apiSignUp, apiLogIn, apiGoogleSignIn, saveStoredAuth, setGuestDismissed } from '../utils/auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -68,7 +68,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (mode === 'signup') {
-        const result = await clientSignUp(email.trim(), password, name.trim());
+        const result = await apiSignUp(email.trim(), password, name.trim());
         saveStoredAuth(result.user, result.token);
         setSuccessMsg(`Welcome, ${result.user.name}! Your account has been created.`);
         setTimeout(() => {
@@ -76,7 +76,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           onClose();
         }, 600);
       } else {
-        const result = await clientLogIn(email.trim(), password);
+        const result = await apiLogIn(email.trim(), password);
         saveStoredAuth(result.user, result.token);
         setSuccessMsg(`Welcome back, ${result.user.name}!`);
         setTimeout(() => {
@@ -97,7 +97,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsLoading(true);
 
     try {
-      const result = await clientGoogleSignIn();
+      const result = await apiGoogleSignIn();
       saveStoredAuth(result.user, result.token);
       setSuccessMsg(`Welcome, ${result.user.name}!`);
       setTimeout(() => {
