@@ -13,8 +13,15 @@ import {
   Smartphone,
   Laptop,
 } from 'lucide-react';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+} from 'firebase/auth';
+import { auth, googleProvider } from '../utils/firebase';
 import { UserProfile } from '../types';
-import { apiSignUp, apiLogIn, apiGoogleSignIn, saveStoredAuth, setGuestDismissed } from '../utils/auth';
+import { saveStoredAuth, setGuestDismissed } from '../utils/auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -43,6 +50,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
+  const getFriendlyAuthError = (errorCode: string): string => {
+    switch (errorCode) {
+      case 'auth/email-already-in-use':
+        return 'This email address is already registered. Please log in instead.';
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':
+      case 'auth/user-not-found':
+        return 'Invalid email or password. Please check your credentials.';
+      case 'auth/weak-password':
+        return 'Password is too weak. Please use at least 6 characters.';
+      case 'auth/invalid-email':
+        return 'Please enter a valid email address.';
+      case 'auth/popup-closed-by-user':
+        return 'Google Sign-In popup was closed before completing.';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your internet connection.';
+      default:
+        return errorCode.replace('Firebase: ', '').replace(/$$auth\/.*?$$/, '').trim() || 'Authentication failed. Please try again.';
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -68,24 +96,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (mode === 'signup') {
-        const result = await apiSignUp(email.trim(), password, name.trim());
-        saveStoredAuth(result.user, result.token);
-        setSuccessMsg(`Welcome, ${result.user.name}! Your account has been created.`);
+        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        const firebaseUser = userCredential.user;
+
+        if (name.trim()) {
+          try {
+            await updateProfile(firebaseUser, { displayName: name.trim() });
+          } catch (profileErr) {
+            console.warn('Failed to update display name:', profileErr);
+          }
+        }
+
+        const token = await firebaseUser.getIdToken();
+        const userProfile: UserProfile = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || email.trim(),
+          name: firebaseUser.displayName || name.trim() || email.split('@')[0],
+          createdAt: new Date().toISOString(),
+        };
+
+        saveStoredAuth(userProfile, token);
+        setSuccessMsg(`Welcome, ${userProfile.name}! Your account has been created.`);
         setTimeout(() => {
-          onAuthenticated(result.user, result.token);
+          onAuthenticated(userProfile, token);
           onClose();
         }, 600);
       } else {
-        const result = await apiLogIn(email.trim(), password);
-        saveStoredAuth(result.user, result.token);
-        setSuccessMsg(`Welcome back, ${result.user.name}!`);
+        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const firebaseUser = userCredential.user;
+        const token = await firebaseUser.getIdToken();
+        const userProfile: UserProfile = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || email.trim(),
+          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+          createdAt: new Date().toISOString(),
+        };
+
+        saveStoredAuth(userProfile, token);
+        setSuccessMsg(`Welcome back, ${userProfile.name}!`);
         setTimeout(() => {
-          onAuthenticated(result.user, result.token);
+          onAuthenticated(userProfile, token);
           onClose();
         }, 600);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication failed. Please check your credentials.');
+      const code = err.code || err.message || '';
+      setErrorMsg(getFriendlyAuthError(code));
     } finally {
       setIsLoading(false);
     }
@@ -97,15 +153,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsLoading(true);
 
     try {
-      const result = await apiGoogleSignIn();
-      saveStoredAuth(result.user, result.token);
-      setSuccessMsg(`Welcome, ${result.user.name}!`);
+      const result = await signInWithPopup(auth, googleProvider);
+      const firebaseUser = result.user;
+      const token = await firebaseUser.getIdToken();
+      const userProfile: UserProfile = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+        createdAt: new Date().toISOString(),
+      };
+
+      saveStoredAuth(userProfile, token);
+      setSuccessMsg(`Welcome, ${userProfile.name}!`);
       setTimeout(() => {
-        onAuthenticated(result.user, result.token);
+        onAuthenticated(userProfile, token);
         onClose();
       }, 600);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Google sign-in failed.');
+      setErrorMsg(getFriendlyAuthError(err.code || err.message));
     } finally {
       setIsLoading(false);
     }
@@ -180,7 +245,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <Smartphone className="w-3.5 h-3.5" />
           </div>
           <p className="text-[11px] leading-tight">
-            <span className={`font-bold ${isLight ? 'text-cyan-900' : 'text-cyan-300'}`}>Multi-Device Auto Sync:</span> Use one account on laptop, tablet, & phone with live auto-refresh.
+            <span className={`font-bold ${isLight ? 'text-cyan-900' : 'text-cyan-300'}`}>Cloud Sync Active:</span> Log in with Firebase Cloud Auth to sync across PC & phone instantly.
           </p>
         </div>
 
@@ -421,7 +486,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Footer Guest Dismiss */}
         <div className="mt-5 text-center">
           <button
-            type="button"
+            type="auth-guest"
             onClick={handleContinueAsGuest}
             className={`text-xs transition cursor-pointer underline underline-offset-4 ${
               isLight ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
