@@ -1,0 +1,6 @@
+{
+  "name": "OC",
+  "description": "OC - A high-performance focus timer and study sanctuary featuring daily, monthly, and long-term goals with deadline times and automated reminders, an editable task manager, strict anti-cheat focus lock, ambient flow audio, and cross-device sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
