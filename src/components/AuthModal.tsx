@@ -13,15 +13,8 @@ import {
   Smartphone,
   Laptop,
 } from 'lucide-react';
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  updateProfile,
-} from 'firebase/auth';
-import { auth, googleProvider } from '../utils/firebase';
 import { UserProfile } from '../types';
-import { saveStoredAuth, setGuestDismissed } from '../utils/auth';
+import { clientSignUp, clientLogIn, clientGoogleSignIn, saveStoredAuth, setGuestDismissed } from '../utils/auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -50,27 +43,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  const getFriendlyAuthError = (errorCode: string): string => {
-    switch (errorCode) {
-      case 'auth/email-already-in-use':
-        return 'This email address is already registered. Please log in instead.';
-      case 'auth/wrong-password':
-      case 'auth/invalid-credential':
-      case 'auth/user-not-found':
-        return 'Invalid email or password. Please check your credentials.';
-      case 'auth/weak-password':
-        return 'Password is too weak. Please use at least 6 characters.';
-      case 'auth/invalid-email':
-        return 'Please enter a valid email address.';
-      case 'auth/popup-closed-by-user':
-        return 'Google Sign-In popup was closed before completing.';
-      case 'auth/network-request-failed':
-        return 'Network error. Please check your internet connection.';
-      default:
-        return errorCode.replace('Firebase: ', '').replace(/$$auth\/.*?$$/, '').trim() || 'Authentication failed. Please try again.';
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -96,52 +68,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (mode === 'signup') {
-        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        const firebaseUser = userCredential.user;
-
-        if (name.trim()) {
-          try {
-            await updateProfile(firebaseUser, { displayName: name.trim() });
-          } catch (profileErr) {
-            console.warn('Failed to update display name:', profileErr);
-          }
-        }
-
-        const token = await firebaseUser.getIdToken();
-        const userProfile: UserProfile = {
-          id: firebaseUser.uid,
-          email: firebaseUser.email || email.trim(),
-          name: firebaseUser.displayName || name.trim() || email.split('@')[0],
-          createdAt: new Date().toISOString(),
-        };
-
-        saveStoredAuth(userProfile, token);
-        setSuccessMsg(`Welcome, ${userProfile.name}! Your account has been created.`);
+        const result = await clientSignUp(email.trim(), password, name.trim());
+        saveStoredAuth(result.user, result.token);
+        setSuccessMsg(`Welcome, ${result.user.name}! Your account has been created.`);
         setTimeout(() => {
-          onAuthenticated(userProfile, token);
+          onAuthenticated(result.user, result.token);
           onClose();
         }, 600);
       } else {
-        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const firebaseUser = userCredential.user;
-        const token = await firebaseUser.getIdToken();
-        const userProfile: UserProfile = {
-          id: firebaseUser.uid,
-          email: firebaseUser.email || email.trim(),
-          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-          createdAt: new Date().toISOString(),
-        };
-
-        saveStoredAuth(userProfile, token);
-        setSuccessMsg(`Welcome back, ${userProfile.name}!`);
+        const result = await clientLogIn(email.trim(), password);
+        saveStoredAuth(result.user, result.token);
+        setSuccessMsg(`Welcome back, ${result.user.name}!`);
         setTimeout(() => {
-          onAuthenticated(userProfile, token);
+          onAuthenticated(result.user, result.token);
           onClose();
         }, 600);
       }
     } catch (err: any) {
-      const code = err.code || err.message || '';
-      setErrorMsg(getFriendlyAuthError(code));
+      setErrorMsg(err.message || 'Authentication failed. Please check your credentials.');
     } finally {
       setIsLoading(false);
     }
@@ -153,24 +97,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsLoading(true);
 
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const firebaseUser = result.user;
-      const token = await firebaseUser.getIdToken();
-      const userProfile: UserProfile = {
-        id: firebaseUser.uid,
-        email: firebaseUser.email || '',
-        name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-        createdAt: new Date().toISOString(),
-      };
-
-      saveStoredAuth(userProfile, token);
-      setSuccessMsg(`Welcome, ${userProfile.name}!`);
+      const result = await clientGoogleSignIn();
+      saveStoredAuth(result.user, result.token);
+      setSuccessMsg(`Welcome, ${result.user.name}!`);
       setTimeout(() => {
-        onAuthenticated(userProfile, token);
+        onAuthenticated(result.user, result.token);
         onClose();
       }, 600);
     } catch (err: any) {
-      setErrorMsg(getFriendlyAuthError(err.code || err.message));
+      setErrorMsg(err.message || 'Google sign-in failed.');
     } finally {
       setIsLoading(false);
     }
@@ -228,8 +163,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </h2>
           <p className={`text-xs mt-1 max-w-xs ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
             {mode === 'signup'
-              ? 'Join OC to auto-sync your study sessions, goals, and focus tasks across all your devices.'
-              : 'Sign in to access your synchronized focus sanctuary and study history.'}
+              ? 'Join OC to save your study sessions, goals, and focus tasks securely.'
+              : 'Sign in to access your focus sanctuary and study history.'}
           </p>
         </div>
 
@@ -245,7 +180,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <Smartphone className="w-3.5 h-3.5" />
           </div>
           <p className="text-[11px] leading-tight">
-            <span className={`font-bold ${isLight ? 'text-cyan-900' : 'text-cyan-300'}`}>Cloud Sync Active:</span> Log in with Firebase Cloud Auth to sync across PC & phone instantly.
+            <span className={`font-bold ${isLight ? 'text-cyan-900' : 'text-cyan-300'}`}>Secure Account:</span> Sign in to access your profile and saved study history.
           </p>
         </div>
 
@@ -472,7 +407,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             ) : mode === 'signup' ? (
               <>
                 <UserPlus className="w-4 h-4" />
-                <span>Create Account & Start Syncing</span>
+                <span>Create Account & Start</span>
               </>
             ) : (
               <>
@@ -486,13 +421,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Footer Guest Dismiss */}
         <div className="mt-5 text-center">
           <button
-            type="auth-guest"
+            type="button"
             onClick={handleContinueAsGuest}
             className={`text-xs transition cursor-pointer underline underline-offset-4 ${
               isLight ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
             }`}
           >
-            Continue as guest (sync locally)
+            Continue as guest
           </button>
         </div>
       </div>
