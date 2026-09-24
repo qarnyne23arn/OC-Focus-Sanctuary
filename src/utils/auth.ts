@@ -1,4 +1,6 @@
 import { UserProfile } from '../types';
+import { getSupabaseClient } from './supabase';
+import { ensureSupabaseProfile, ensureSupabaseSettings } from './supabaseCrud';
 
 const STORAGE_KEY_AUTH_USER = 'oc_auth_user_v1';
 const STORAGE_KEY_AUTH_TOKEN = 'oc_auth_token_v1';
@@ -35,6 +37,10 @@ export function clearStoredAuth(): void {
   try {
     localStorage.removeItem(STORAGE_KEY_AUTH_USER);
     localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+    const client = getSupabaseClient();
+    if (client) {
+      client.auth.signOut().catch(() => {});
+    }
   } catch (err) {
     console.warn('Failed to clear auth credentials', err);
   }
@@ -60,7 +66,7 @@ export function setGuestDismissed(dismissed: boolean): void {
   }
 }
 
-// Client-side Users DB helper
+// Client-side Users DB helper fallback
 function getUsersDb(): Record<string, { user: UserProfile; passwordHash: string }> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_USERS_DB);
@@ -80,8 +86,39 @@ function saveUsersDb(db: Record<string, { user: UserProfile; passwordHash: strin
 
 export async function clientSignUp(email: string, password: string, name?: string): Promise<{ user: UserProfile; token: string }> {
   const normalizedEmail = email.trim().toLowerCase();
-  const db = getUsersDb();
+  const client = getSupabaseClient();
 
+  if (client) {
+    const { data, error } = await client.auth.signUp({
+      email: normalizedEmail,
+      password,
+      options: {
+        data: { name: name?.trim() || normalizedEmail.split('@')[0] },
+      },
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error('Supabase sign up failed.');
+
+    if (!data.session) {
+      throw new Error('Account created! Please check Supabase Auth settings if email confirmation is required, or turn off "Confirm email" in Supabase Authentication -> Providers -> Email.');
+    }
+
+    const token = data.session.access_token;
+    const user: UserProfile = {
+      id: data.user.id,
+      email: data.user.email || normalizedEmail,
+      name: data.user.user_metadata?.name || name?.trim() || normalizedEmail.split('@')[0],
+      createdAt: data.user.created_at || new Date().toISOString(),
+    };
+
+    await ensureSupabaseProfile(user.id, user.email, user.name);
+    await ensureSupabaseSettings(user.id);
+    console.log('ensureSupabaseSettings completed successfully for user (signup):', user.id);
+
+    return { user, token };
+  }
+
+  const db = getUsersDb();
   if (db[normalizedEmail]) {
     throw new Error('This email address is already registered. Please log in instead.');
   }
@@ -94,30 +131,62 @@ export async function clientSignUp(email: string, password: string, name?: strin
     createdAt: new Date().toISOString(),
   };
 
-  db[normalizedEmail] = {
-    user,
-    passwordHash: password, // simple storage for demo / client mode
-  };
+  db[normalizedEmail] = { user, passwordHash: password };
   saveUsersDb(db);
 
-  const token = 'token_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const token = 'token_' + Math.random().toString(36).substring(2, 15);
   return { user, token };
 }
 
 export async function clientLogIn(email: string, password: string): Promise<{ user: UserProfile; token: string }> {
   const normalizedEmail = email.trim().toLowerCase();
-  const db = getUsersDb();
+  const client = getSupabaseClient();
 
+  if (client) {
+    const { data, error } = await client.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user || !data.session) throw new Error('Supabase login failed. Please verify your email or password.');
+
+    const token = data.session.access_token;
+    const user: UserProfile = {
+      id: data.user.id,
+      email: data.user.email || normalizedEmail,
+      name: data.user.user_metadata?.name || normalizedEmail.split('@')[0],
+      createdAt: data.user.created_at || new Date().toISOString(),
+    };
+
+    await ensureSupabaseProfile(user.id, user.email, user.name);
+    await ensureSupabaseSettings(user.id);
+    console.log('ensureSupabaseSettings completed successfully for user (login):', user.id);
+
+    return { user, token };
+  }
+
+  const db = getUsersDb();
   const record = db[normalizedEmail];
   if (!record || record.passwordHash !== password) {
     throw new Error('Invalid email or password. Please check your credentials.');
   }
 
-  const token = 'token_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const token = 'token_' + Math.random().toString(36).substring(2, 15);
   return { user: record.user, token };
 }
 
 export async function clientGoogleSignIn(): Promise<{ user: UserProfile; token: string }> {
+  const client = getSupabaseClient();
+  if (client) {
+    const { error } = await client.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin,
+      },
+    });
+    if (error) throw new Error(error.message);
+  }
+
   const randomNum = Math.floor(Math.random() * 10000);
   const email = `google_user_${randomNum}@gmail.com`;
   const name = 'Google Scholar';
@@ -125,6 +194,13 @@ export async function clientGoogleSignIn(): Promise<{ user: UserProfile; token: 
 }
 
 export async function apiChangePassword(token: string, currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (client) {
+    const { error } = await client.auth.updateUser({ password: newPassword });
+    if (error) throw new Error(error.message);
+    return { success: true, message: 'Password updated successfully in Supabase.' };
+  }
+
   const authState = loadStoredAuth();
   if (!authState.user) {
     throw new Error('No authenticated user found.');
@@ -140,27 +216,4 @@ export async function apiChangePassword(token: string, currentPassword: string, 
   record.passwordHash = newPassword;
   saveUsersDb(db);
   return { success: true, message: 'Password updated successfully.' };
-}
-
-export async function apiPushUserSync(token: string, data: any): Promise<{ updatedAt: string }> {
-  try {
-    const updatedAt = new Date().toISOString();
-    localStorage.setItem('oc_user_cloud_sync_data', JSON.stringify({ data, updatedAt }));
-    return { updatedAt };
-  } catch {
-    throw new Error('Failed to save workspace data.');
-  }
-}
-
-export async function apiPullUserSync(token: string): Promise<{ exists: boolean; data: any; updatedAt?: string }> {
-  try {
-    const raw = localStorage.getItem('oc_user_cloud_sync_data');
-    if (!raw) {
-      return { exists: false, data: null };
-    }
-    const parsed = JSON.parse(raw);
-    return { exists: true, data: parsed.data, updatedAt: parsed.updatedAt };
-  } catch {
-    return { exists: false, data: null };
-  }
 }

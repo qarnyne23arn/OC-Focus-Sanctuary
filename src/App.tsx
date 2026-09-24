@@ -126,10 +126,25 @@ import {
   loadStoredAuth, 
   saveStoredAuth, 
   clearStoredAuth, 
-  isGuestDismissed, 
-  apiPushUserSync, 
-  apiPullUserSync 
+  isGuestDismissed
 } from './utils/auth';
+import {
+  supabaseFetchGoals,
+  supabaseInsertGoal,
+  supabaseDeleteGoal,
+  supabaseFetchTasks,
+  supabaseInsertTask,
+  supabaseDeleteTask,
+  supabaseFetchSessions,
+  supabaseInsertSession,
+  supabaseFetchReflections,
+  supabaseInsertReflection,
+  supabaseFetchBlockedSites,
+  supabaseInsertBlockedSite,
+  supabaseDeleteBlockedSite,
+  supabaseFetchSettings,
+  supabaseUpsertSettings,
+} from './utils/supabaseCrud';
 
 export default function App() {
   // Persistence state
@@ -223,6 +238,7 @@ export default function App() {
   // Ref for timer interval
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionStartTimeRef = useRef<number | null>(null);
+  const hasCompletedRef = useRef<boolean>(false);
 
   // Calculate metrics for Today matching the image
   const todayStr = getTodayDateString();
@@ -443,102 +459,66 @@ export default function App() {
     }
   }, [settings.themeMode]);
 
-  // Pull Account Data for Multi-Device Auto-Sync
-  const pullAccountSync = useCallback(async (token: string, silent = true) => {
-    try {
+  // Initial Direct Table Fetch when signed in (no JSON blob sync, no polling)
+  useEffect(() => {
+    if (authData.user?.id) {
+      const userId = authData.user.id;
       setIsAccountSyncing(true);
-      const res = await apiPullUserSync(token);
-      if (res.exists && res.data) {
-        if (res.data.sessions) setSessions(res.data.sessions);
-        if (res.data.settings) setSettings(res.data.settings);
-        if (res.data.blockedSites) setBlockedSites(res.data.blockedSites);
-        if (res.data.tasks) setTasks(res.data.tasks);
-        if (res.data.goals) setGoals(res.data.goals);
-        if (res.data.activeTaskName !== undefined) setActiveTaskName(res.data.activeTaskName);
-        if (res.updatedAt) setLastAccountSyncedAt(res.updatedAt);
-        if (!silent) {
-          addAlert('Account Synced', 'Updated with latest state from other devices.', 'milestone');
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to auto-sync account workspace', err);
-    } finally {
-      setIsAccountSyncing(false);
-    }
-  }, [addAlert]);
-
-  // Initial Pull when signed in
-  useEffect(() => {
-    if (authData.token) {
-      pullAccountSync(authData.token, true);
-    }
-  }, [authData.token, pullAccountSync]);
-
-  // Debounced Push to Server on State Changes for Multi-Device Auto-Sync
-  useEffect(() => {
-    if (!authData.token) return;
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await apiPushUserSync(authData.token!, {
-          sessions,
-          settings,
-          blockedSites,
-          tasks,
-          goals,
-          activeTaskName,
+      Promise.all([
+        supabaseFetchGoals(userId),
+        supabaseFetchTasks(userId),
+        supabaseFetchSessions(userId),
+        supabaseFetchReflections(userId),
+        supabaseFetchBlockedSites(userId),
+        supabaseFetchSettings(userId),
+      ])
+        .then(([g, t, s, r, b, set]) => {
+          if (g.length > 0) setGoals(g);
+          if (t.length > 0) setTasks(t);
+          if (s.length > 0) setSessions(s);
+          if (r.length > 0) setReflections(r);
+          if (b.length > 0) setBlockedSites(b);
+          if (set) setSettings(set);
+          setLastAccountSyncedAt(new Date().toISOString());
+        })
+        .catch((err) => {
+          console.warn('Direct Supabase tables fetch warning:', err);
+        })
+        .finally(() => {
+          setIsAccountSyncing(false);
         });
-        setLastAccountSyncedAt(res.updatedAt);
-      } catch (err) {
-        console.warn('Auto sync push failed', err);
-      }
-    }, 1500);
+    }
+  }, [authData.user?.id]);
 
-    return () => clearTimeout(timer);
-  }, [sessions, settings, blockedSites, tasks, goals, activeTaskName, authData.token]);
-
-  // Background Auto-Sync Poller (every 20 seconds and on window focus for cross-device live updates)
-  useEffect(() => {
-    if (!authData.token) return;
-
-    const interval = setInterval(() => {
-      pullAccountSync(authData.token!, true);
-    }, 20000);
-
-    const onFocus = () => {
-      pullAccountSync(authData.token!, true);
-    };
-
-    window.addEventListener('focus', onFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [authData.token, pullAccountSync]);
-
-  // Manual Trigger Sync for Current Account
+  // Manual Trigger Refresh for Current Account
   const handleTriggerAccountSync = async () => {
-    if (!authData.token) {
-      addAlert('Guest Mode', 'Sign in or create an account to auto-sync across devices.', 'milestone');
+    if (!authData.user?.id) {
+      addAlert('Guest Mode', 'Sign in or create an account to sync with database tables.', 'milestone');
       setIsAuthModalOpen(true);
       return;
     }
 
     try {
       setIsAccountSyncing(true);
-      const pushRes = await apiPushUserSync(authData.token, {
-        sessions,
-        settings,
-        blockedSites,
-        tasks,
-        activeTaskName,
-      });
-      setLastAccountSyncedAt(pushRes.updatedAt);
-      await pullAccountSync(authData.token, false);
-      addAlert('Account Synced', 'Workspace is synchronized with all devices in real-time.', 'milestone');
+      const userId = authData.user.id;
+      const [g, t, s, r, b, set] = await Promise.all([
+        supabaseFetchGoals(userId),
+        supabaseFetchTasks(userId),
+        supabaseFetchSessions(userId),
+        supabaseFetchReflections(userId),
+        supabaseFetchBlockedSites(userId),
+        supabaseFetchSettings(userId),
+      ]);
+      if (g.length > 0) setGoals(g);
+      if (t.length > 0) setTasks(t);
+      if (s.length > 0) setSessions(s);
+      if (r.length > 0) setReflections(r);
+      if (b.length > 0) setBlockedSites(b);
+      if (set) setSettings(set);
+      setLastAccountSyncedAt(new Date().toISOString());
+      addAlert('Database Synced', 'Refreshed directly from Supabase relational tables.', 'milestone');
     } catch {
-      addAlert('Sync Error', 'Failed to reach synchronization service.', 'milestone');
+      addAlert('Sync Error', 'Failed to reach Supabase database tables.', 'milestone');
     } finally {
       setIsAccountSyncing(false);
     }
@@ -552,12 +532,26 @@ export default function App() {
     addAlert('Signed Out', 'You are now in guest mode. Data remains stored locally.', 'milestone');
   };
 
+  // Helper to update settings locally and in Supabase
+  const updateAppSettings = async (newSettings: AppSettings) => {
+    console.log('updateAppSettings called with:', { userId: authData.user?.id, newSettings });
+    setSettings(newSettings);
+    saveLocalSettings(newSettings);
+    if (authData.user?.id) {
+      try {
+        await supabaseUpsertSettings(authData.user.id, newSettings);
+        console.log('supabaseUpsertSettings completed successfully.');
+      } catch (err) {
+        console.warn('Supabase upsert settings failed:', err);
+      }
+    }
+  };
+
   // Theme Mode Toggle
   const toggleThemeMode = () => {
     const nextTheme: ThemeMode = settings.themeMode === 'light' ? 'dark' : 'light';
     const updatedSettings: AppSettings = { ...settings, themeMode: nextTheme };
-    setSettings(updatedSettings);
-    saveLocalSettings(updatedSettings);
+    updateAppSettings(updatedSettings);
     addAlert('Theme Changed', `Switched to ${nextTheme === 'light' ? 'Day Mode (Light)' : 'Night Mode (Dark)'}`, 'milestone');
   };
 
@@ -666,6 +660,8 @@ export default function App() {
 
   // Session completion handler
   const handleSessionComplete = useCallback(() => {
+    if (hasCompletedRef.current) return;
+    hasCompletedRef.current = true;
     setIsRunning(false);
     playCompletionFanfare();
 
@@ -684,13 +680,26 @@ export default function App() {
 
     setSessions((prev) => [newSession, ...prev]);
 
+    if (authData.user?.id) {
+      supabaseInsertSession(authData.user.id, newSession).catch((err) =>
+        console.warn('Supabase insert session failed:', err)
+      );
+    }
+
     // Update pomodoros on active task
     setTasks((prev) =>
-      prev.map((t) =>
-        t.name.toLowerCase() === activeTaskName.toLowerCase()
-          ? { ...t, pomodorosLogged: t.pomodorosLogged + 1 }
-          : t
-      )
+      prev.map((t) => {
+        if (t.name.toLowerCase() === activeTaskName.toLowerCase()) {
+          const updated = { ...t, pomodorosLogged: t.pomodorosLogged + 1 };
+          if (authData.user?.id) {
+            supabaseInsertTask(authData.user.id, updated).catch((err) =>
+              console.warn('Supabase update task pomodoros failed:', err)
+            );
+          }
+          return updated;
+        }
+        return t;
+      })
     );
 
     // Handle offline queue
@@ -762,6 +771,7 @@ export default function App() {
     playToggleTick();
     if (!isRunning) {
       playStartChime();
+      hasCompletedRef.current = false;
       sessionStartTimeRef.current = Date.now();
       setIsRunning(true);
       const snapshot: SessionSnapshot = {
@@ -792,6 +802,7 @@ export default function App() {
   // Reset Timer
   const handleReset = () => {
     playToggleTick();
+    hasCompletedRef.current = false;
     if (remainingSeconds < totalSeconds) {
       const snapshot: SessionSnapshot = {
         remainingSeconds,
@@ -817,6 +828,7 @@ export default function App() {
   // Set Timer Time by Yourself (requested by user)
   const handleSetCustomDuration = (minutes: number) => {
     playToggleTick();
+    hasCompletedRef.current = false;
     setIsRunning(false);
     const secs = minutes * 60;
     setTotalSeconds(secs);
@@ -824,8 +836,7 @@ export default function App() {
 
     if (mode === 'focus') {
       const updatedSettings = { ...settings, focusDurationMinutes: minutes };
-      setSettings(updatedSettings);
-      saveLocalSettings(updatedSettings);
+      updateAppSettings(updatedSettings);
     }
 
     addAlert('Timer Adjusted', `Duration set to ${minutes} minutes. Ready to start!`, 'milestone');
@@ -834,6 +845,7 @@ export default function App() {
   // Switch Modes (Focus / Short Break / Long Break)
   const handleSwitchMode = (newMode: TimerMode) => {
     playToggleTick();
+    hasCompletedRef.current = false;
     setIsRunning(false);
     setMode(newMode);
 
@@ -958,12 +970,31 @@ export default function App() {
     setTasks((prev) => [newTask, ...prev]);
     setActiveTaskName(name);
     addAlert('Task Added', `"${name}" is now your active study task!`, 'milestone');
+
+    if (authData.user?.id) {
+      supabaseInsertTask(authData.user.id, newTask).catch((err) =>
+        console.warn('Supabase insert task failed:', err)
+      );
+    }
   };
 
   const handleToggleTaskComplete = (id: string) => {
+    let targetTask: TaskItem | undefined;
     setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
+      prev.map((t) => {
+        if (t.id === id) {
+          targetTask = { ...t, completed: !t.completed };
+          return targetTask;
+        }
+        return t;
+      })
     );
+
+    if (authData.user?.id && targetTask) {
+      supabaseInsertTask(authData.user.id, targetTask).catch((err) =>
+        console.warn('Supabase update task complete failed:', err)
+      );
+    }
   };
 
   const handleDeleteTask = (id: string) => {
@@ -972,13 +1003,32 @@ export default function App() {
       setActiveTaskName('');
     }
     setTasks((prev) => prev.filter((t) => t.id !== id));
+
+    if (authData.user?.id) {
+      supabaseDeleteTask(authData.user.id, id).catch((err) =>
+        console.warn('Supabase delete task failed:', err)
+      );
+    }
   };
 
   // Website Blocker Actions
   const handleToggleBlockedSite = (id: string) => {
-    const updated = blockedSites.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s));
+    let targetSite: BlockedWebsite | undefined;
+    const updated = blockedSites.map((s) => {
+      if (s.id === id) {
+        targetSite = { ...s, enabled: !s.enabled };
+        return targetSite;
+      }
+      return s;
+    });
     setBlockedSites(updated);
     saveLocalBlockedSites(updated);
+
+    if (authData.user?.id && targetSite) {
+      supabaseInsertBlockedSite(authData.user.id, targetSite).catch((err) =>
+        console.warn('Supabase update blocked site failed:', err)
+      );
+    }
   };
 
   const handleAddBlockedSite = (domain: string, name: string) => {
@@ -993,12 +1043,24 @@ export default function App() {
     setBlockedSites(updated);
     saveLocalBlockedSites(updated);
     addAlert('Shield Updated', `Added ${domain} to blocked websites list.`, 'milestone');
+
+    if (authData.user?.id) {
+      supabaseInsertBlockedSite(authData.user.id, newSite).catch((err) =>
+        console.warn('Supabase insert blocked site failed:', err)
+      );
+    }
   };
 
   const handleRemoveBlockedSite = (id: string) => {
     const updated = blockedSites.filter((s) => s.id !== id);
     setBlockedSites(updated);
     saveLocalBlockedSites(updated);
+
+    if (authData.user?.id) {
+      supabaseDeleteBlockedSite(authData.user.id, id).catch((err) =>
+        console.warn('Supabase delete blocked site failed:', err)
+      );
+    }
   };
 
   const handleSimulateBlock = (domain: string) => {
@@ -1056,6 +1118,12 @@ export default function App() {
     setReflections(updated);
     saveLocalReflections(updated);
 
+    if (authData.user?.id) {
+      supabaseInsertReflection(authData.user.id, reflection).catch((err) =>
+        console.warn('Supabase insert reflection failed:', err)
+      );
+    }
+
     // Update latest session with energy_after
     setSessions((prev) => {
       if (prev.length === 0) return prev;
@@ -1065,6 +1133,11 @@ export default function App() {
         energy_after: reflection.energyLevel,
       };
       saveLocalSessions(copy);
+      if (authData.user?.id) {
+        supabaseInsertSession(authData.user.id, copy[0]).catch((err) =>
+          console.warn('Supabase update session energy failed:', err)
+        );
+      }
       return copy;
     });
 
@@ -1088,12 +1161,14 @@ export default function App() {
 
   // 1-Click Science-Backed Focus Protocol Activation
   const handleSelectProtocol = (proto: FocusProtocol) => {
+    hasCompletedRef.current = false;
     setIsRunning(false);
-    setSettings((prev) => ({
-      ...prev,
+    const updatedSettings = {
+      ...settings,
       focusDurationMinutes: proto.focusMinutes,
       shortBreakMinutes: proto.breakMinutes,
-    }));
+    };
+    updateAppSettings(updatedSettings);
     setTotalSeconds(proto.focusMinutes * 60);
     setRemainingSeconds(proto.focusMinutes * 60);
     setMode('focus');
@@ -1105,7 +1180,7 @@ export default function App() {
   };
 
   // Goals & Deadlines Handlers
-  const handleAddGoal = (newGoalData: Omit<GoalItem, 'id' | 'createdAt' | 'completed'>) => {
+  const handleAddGoal = async (newGoalData: Omit<GoalItem, 'id' | 'createdAt' | 'completed'>) => {
     const newGoal: GoalItem = {
       ...newGoalData,
       id: 'g-' + Math.random().toString(36).substring(2, 9),
@@ -1115,15 +1190,32 @@ export default function App() {
     setGoals((prev) => [newGoal, ...prev]);
     playToggleTick();
     addAlert('🎯 Goal Created', `"${newGoal.title}" added with deadline at ${newGoal.deadlineTime}.`, 'milestone');
+
+    if (authData.user?.id) {
+      try {
+        await supabaseInsertGoal(authData.user.id, newGoal);
+      } catch (err) {
+        console.warn('Supabase insert goal failed:', err);
+      }
+    }
   };
 
-  const handleUpdateGoal = (updatedGoal: GoalItem) => {
+  const handleUpdateGoal = async (updatedGoal: GoalItem) => {
     setGoals((prev) => prev.map((g) => (g.id === updatedGoal.id ? updatedGoal : g)));
     playToggleTick();
     addAlert('Goal Updated', `"${updatedGoal.title}" settings saved.`, 'milestone');
+
+    if (authData.user?.id) {
+      try {
+        await supabaseInsertGoal(authData.user.id, updatedGoal);
+      } catch (err) {
+        console.warn('Supabase update goal failed:', err);
+      }
+    }
   };
 
-  const handleToggleGoalComplete = (id: string) => {
+  const handleToggleGoalComplete = async (id: string) => {
+    let targetGoal: GoalItem | undefined;
     setGoals((prev) =>
       prev.map((g) => {
         if (g.id === id) {
@@ -1135,21 +1227,39 @@ export default function App() {
             playToggleTick();
             addAlert('Goal Reopened', `"${g.title}" marked active.`, 'milestone');
           }
-          return {
+          targetGoal = {
             ...g,
             completed: nextCompleted,
             completedAt: nextCompleted ? new Date().toISOString() : undefined,
           };
+          return targetGoal;
         }
         return g;
       })
     );
+
+    if (authData.user?.id && targetGoal) {
+      try {
+        await supabaseInsertGoal(authData.user.id, targetGoal);
+      } catch (err) {
+        console.warn('Supabase toggle goal complete failed:', err);
+      }
+    }
   };
 
-  const handleDeleteGoal = (id: string) => {
-    setGoals((prev) => prev.filter((g) => g.id !== id));
+  const handleDeleteGoal = async (id: string) => {
+    const nextGoals = goals.filter((g) => g.id !== id);
+    setGoals(nextGoals);
     playToggleTick();
     addAlert('Goal Removed', 'Goal deleted from tracker.', 'milestone');
+
+    if (authData.user?.id) {
+      try {
+        await supabaseDeleteGoal(authData.user.id, id);
+      } catch (err) {
+        console.warn('Immediate goal deletion failed:', err);
+      }
+    }
   };
 
   const handleSelectGoalAsTask = (goalTitle: string, targetMinutes?: number) => {
@@ -2517,8 +2627,8 @@ export default function App() {
         onAuthenticated={(user, token) => {
           setAuthData({ user, token });
           setIsAuthModalOpen(false);
-          pullAccountSync(token, false);
-          addAlert('Account Connected', `Welcome, ${user.name}! Workspace synchronized across your devices.`, 'milestone');
+          handleTriggerAccountSync();
+          addAlert('Account Connected', `Welcome, ${user.name}! Connected to Supabase tables.`, 'milestone');
         }}
         isLight={isLight}
       />
@@ -2529,8 +2639,7 @@ export default function App() {
         onClose={() => setIsSettingsModalOpen(false)}
         settings={settings}
         onUpdateSettings={(updated) => {
-          setSettings(updated);
-          saveLocalSettings(updated);
+          updateAppSettings(updated);
         }}
         currentUser={authData.user}
         authToken={authData.token}

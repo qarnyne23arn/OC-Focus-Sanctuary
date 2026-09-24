@@ -12,8 +12,8 @@ import {
   invalidateToken,
 } from "./server/authStore.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = typeof __filename !== 'undefined' ? __filename : (import.meta?.url ? fileURLToPath(import.meta.url) : '');
+const __dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(__filename || process.cwd());
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -232,20 +232,24 @@ app.post("/api/sync/:syncCode", (req, res) => {
 });
 
 // Vite middleware setup & immediate server start
-if (process.env.NODE_ENV !== "production") {
+const distPath = path.join(process.cwd(), "dist");
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(distPath));
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+} else {
   createViteServer({
     server: { middlewareMode: true },
     appType: "spa",
   }).then((vite) => {
     app.use(vite.middlewares);
   }).catch((err) => {
-    console.error("Vite server creation failed:", err);
-  });
-} else {
-  const distPath = path.join(process.cwd(), "dist");
-  app.use(express.static(distPath));
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
+    console.error("Vite server creation failed, serving static dist:", err);
+    app.use(express.static(distPath));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   });
 }
 

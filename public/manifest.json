@@ -1,0 +1,16 @@
+{
+  "name": "Focus Sanctuary",
+  "short_name": "FocusSanctuary",
+  "description": "A high-performance focus timer and study sanctuary featuring goals, tasks, focus lock, and audio.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#06b6d4",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png"
+    }
+  ]
+}
