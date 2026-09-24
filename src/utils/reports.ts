@@ -85,15 +85,15 @@ export function calculateDailyReport(
   const takenCount = daySessions.filter(s => s.break_taken === true || s.break_scheduled === false).length;
   const breakRate = scheduledCount > 0 ? takenCount / scheduledCount : 1.0;
 
-  // Hourly bars (8am to 7pm)
-  const hourlyBars = Array.from({ length: 12 }, (_, i) => {
-    const hourNum = i + 8;
+  // Hourly bars (6am to 12pm & 6pm to 12am inclusive)
+  const targetHours = [6, 7, 8, 9, 10, 11, 12, 18, 19, 20, 21, 22, 23, 0];
+  const hourlyBars = targetHours.map(hourNum => {
     const matching = daySessions.filter(s => {
       const d = new Date(s.timestamp || s.date || Date.now());
       return !isNaN(d.getTime()) && d.getHours() === hourNum;
     });
     const mins = matching.reduce((acc, s) => acc + (s.actualMinutes || s.durationMinutes || 0), 0);
-    const hourLabel = hourNum === 12 ? '12pm' : hourNum > 12 ? `${hourNum - 12}pm` : `${hourNum}am`;
+    const hourLabel = hourNum === 0 ? '12am' : hourNum === 12 ? '12pm' : hourNum > 12 ? `${hourNum - 12}pm` : `${hourNum}am`;
     return { hour: hourLabel, mins };
   });
 

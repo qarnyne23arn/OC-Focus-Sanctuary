@@ -195,7 +195,7 @@ export const UnifiedReportDocument = forwardRef<HTMLDivElement, UnifiedReportDoc
           {/* Focused minutes by hour */}
           <div style={{ padding: '20px', borderRadius: '12px', backgroundColor: '#1a1d24', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#9ca3af' }}>
-              <span>Focused minutes by hour (8am – 7pm)</span>
+              <span>Focused minutes by hour (6am – 12pm & 6pm – 12am)</span>
               <span style={{ color: '#ffffff', fontFamily: 'monospace' }}>Intensity graded</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', height: '96px', paddingTop: '16px', paddingLeft: '8px', paddingRight: '8px' }}>

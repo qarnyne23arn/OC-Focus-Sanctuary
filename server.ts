@@ -12,8 +12,14 @@ import {
   invalidateToken,
 } from "./server/authStore.js";
 
-const __filename = typeof __filename !== 'undefined' ? __filename : (import.meta?.url ? fileURLToPath(import.meta.url) : '');
-const __dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(__filename || process.cwd());
+let __filename = "";
+let __dirname = "";
+try {
+  __filename = typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : (typeof __filename !== 'undefined' ? __filename : '');
+  __dirname = __filename ? path.dirname(__filename) : process.cwd();
+} catch {
+  __dirname = process.cwd();
+}
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
